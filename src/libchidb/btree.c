@@ -47,6 +47,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stdbool.h>
+#include <assert.h>
 #include <chidb/log.h>
 #include "chidbInt.h"
 #include "btree.h"
@@ -54,6 +56,68 @@
 #include "pager.h"
 #include "util.h"
 
+
+#define FILE_HEADER_SIZE (100)
+#define getByte(x)   ((x)[0])
+#define putByte(p,v) ((p)[0] = (uint8_t)(v))
+#define isInternal(type) (type == PGTYPE_TABLE_INTERNAL || type == PGTYPE_INDEX_INTERNAL)
+#define isHeaderPage(npage) (npage == 1)
+static FILE *log;
+
+/* Pack a BTree file's header
+ *
+ * This function takes a buffer representing a page
+ * and packs the first 100 bytes with the default values
+ * that go into the header
+ *
+ * Parameters
+ * - buff_p: Pointer to the start of the buffer that holds the file header in memory 
+ * - page_size: The physical size of the page
+ *
+ * Return
+ * - void
+ */
+static void chidb_Btree_packFileHeader(uint8_t* buff_p, uint16_t page_size)
+{
+	enum 
+	{
+		file_change_ctr = 0,
+		schema_version = 0,
+		page_cache_size = 20000,
+		user_cookie = 0
+	};
+
+	char word[] = "SQLite format 3";
+	int word_size = 16;
+	for(int i = 0; i < word_size; i++)
+	{
+		*(buff_p + i) = word[i];
+	}
+
+	uint8_t* page_size_pos = buff_p + 16;
+	put2byte(page_size_pos, page_size);
+
+	uint8_t* fchange_ctr_pos = buff_p + 24;
+	put4byte(fchange_ctr_pos, file_change_ctr);
+
+	uint8_t* schema_vers_pos = buff_p + 40;
+	put4byte(schema_vers_pos, schema_version);
+
+	uint8_t* page_cache_sz_pos = buff_p + 48;
+	put4byte(page_cache_sz_pos, page_cache_size);
+
+	uint8_t* user_cookie_pos = buff_p + 60;
+	put4byte(user_cookie_pos, user_cookie);
+
+	put4byte(buff_p+32, 0);
+	put4byte(buff_p+36, 0);
+	put4byte(buff_p+52, 0);
+	put4byte(buff_p+64, 0);
+	put4byte(buff_p+44, 1);
+	put4byte(buff_p+56, 1);
+	memcpy(buff_p+0x12, "\x01\x01\x00\x40\x20\x20", 6);
+
+}
 
 /* Open a B-Tree file
  *
@@ -80,8 +144,90 @@
 int chidb_Btree_open(const char *filename, chidb *db, BTree **bt)
 {
     /* Your code goes here */
+    // log = fopen("log.txt", "a");
+    // if(log==NULL){return -1;}
+    // fprintf(log, "Opening chidb\n");
 
-    return CHIDB_OK;
+	if(filename == NULL || db == NULL || bt == NULL)
+	{
+		return CHIDB_EMISUSE;
+	}
+	
+	const int file_h_size = FILE_HEADER_SIZE;
+    //Open the database file 
+	Pager* pgr_p;
+	int open_msg = chidb_Pager_open(&pgr_p, filename);
+	if(open_msg == CHIDB_OK)
+	{
+        //Create a btree structure on the heap that will be realllocated when the file is closed
+		BTree* bt_p = malloc(sizeof(BTree));
+		if(bt_p == NULL)
+		{
+			return CHIDB_ENOMEM;
+		}
+
+        //Fill in default values for the new btree 
+		bt_p -> pager = pgr_p;
+		bt_p -> db = db;
+		db -> bt = bt_p;
+		(*bt) = bt_p;
+		assert((*bt) == bt_p);
+
+        //read the header and make one if the header doesn't exist
+		uint8_t header_buff[file_h_size];
+		if(chidb_Pager_readHeader(pgr_p, header_buff) 
+			== CHIDB_NOHEADER)
+		{
+			chidb_Pager_setPageSize(pgr_p, DEFAULT_PAGE_SIZE);			
+			npage_t init_page_num;
+			chidb_Btree_newNode(bt_p, &init_page_num, PGTYPE_TABLE_LEAF);
+			assert(init_page_num == 1);
+            //READ IN THE PAGE NOW AND THEN WRITE THE HEADER TO IT
+
+            MemPage *header_page_p;
+            int read_msg;
+            if((read_msg = chidb_Pager_readPage(bt_p -> pager, 1, &header_page_p))!=CHIDB_OK)
+            {
+                return read_msg;
+            }
+
+            //Packs header in buffer 
+            uint8_t *page_buff = header_page_p -> data;
+			chidb_Btree_packFileHeader(page_buff, pgr_p->page_size);
+
+            int write_msg;
+            if((write_msg = chidb_Pager_writePage(pgr_p, header_page_p)) != CHIDB_OK)
+            {
+            	return write_msg;
+            }
+
+            int free_msg;
+            if((free_msg = chidb_Pager_releaseMemPage(pgr_p, header_page_p))!= CHIDB_OK)
+            {
+                return free_msg;
+            }
+        }
+        else 
+        {
+        	//Read the page size from the header and set chidb_pager_set_page size
+            uint16_t page_size = get2byte(header_buff + 16);
+            chidb_Pager_setPageSize(pgr_p, page_size);
+            
+            //Check for headers that don't follow the template
+            if (strcmp("SQLite format 3", (char*)header_buff) != 0 ||
+            	get4byte(header_buff+32)!=0 || get4byte(header_buff+36)!=0 ||
+            	get4byte(header_buff+52)!=0 || get4byte(header_buff+64)!=0 ||
+            	get4byte(header_buff+44)!=1 || get4byte(header_buff+56)!=1 ||
+            	getByte(header_buff+18)!=1 || getByte(header_buff+19)!=1   ||
+            	getByte(header_buff+20)!=0 || getByte(header_buff+21)!=0x40||
+            	getByte(header_buff+22)!=0x20 || getByte(header_buff+23)!=0x20 ||
+            	get4byte(header_buff+48)!=20000)
+            {
+        		return CHIDB_ECORRUPTHEADER;
+    		}
+       	}
+    }
+	return CHIDB_OK;
 }
 
 
@@ -100,8 +246,15 @@ int chidb_Btree_open(const char *filename, chidb *db, BTree **bt)
 int chidb_Btree_close(BTree *bt)
 {
     /* Your code goes here */
-
-    return CHIDB_OK;
+    if(bt == NULL)
+    	return CHIDB_EMISUSE;
+	
+	int close_msg;
+	if((close_msg = chidb_Pager_close(bt -> pager)) == CHIDB_OK)
+	{
+		free(bt);
+	}
+    return close_msg;
 }
 
 
@@ -129,10 +282,47 @@ int chidb_Btree_close(BTree *bt)
 int chidb_Btree_getNodeByPage(BTree *bt, npage_t npage, BTreeNode **btn)
 {
     /* Your code goes here */
+	if(bt==NULL || btn == NULL)
+	{
+		return CHIDB_EMISUSE;
+	}
 
-    return CHIDB_OK;
+	//Read in a mempage
+	MemPage* mem_page_p = NULL;
+	int read_msg = chidb_Pager_readPage(bt->pager, npage, &mem_page_p);
+	if(read_msg != CHIDB_OK)
+	{
+		return read_msg;
+	}
+	assert(mem_page_p != NULL);
+	
+	BTreeNode* btn_p = malloc(sizeof(BTreeNode));
+	if(btn_p == NULL)
+	{
+		return CHIDB_ENOMEM;
+	}
+	//Pack the BTree Node with info from the read-in MemPage
+    uint8_t *node_start = isHeaderPage(npage) ? ((mem_page_p -> data)+100) : (mem_page_p -> data);
+	
+    btn_p -> type = getByte(node_start);
+	btn_p -> free_offset = get2byte(node_start + 1);
+	btn_p -> n_cells = get2byte(node_start + 3);
+	btn_p -> cells_offset = get2byte(node_start + 5);
+	if(isInternal(btn_p -> type))
+    {
+        btn_p -> right_page = get4byte(node_start + 8);
+        btn_p -> celloffset_array = (uint8_t*)(node_start + 12);
+    }
+    else
+    {
+        btn_p -> right_page = 0;
+        btn_p -> celloffset_array = (uint8_t*)(node_start + 8);
+    }
+	btn_p -> page = mem_page_p;
+	
+	*btn = btn_p; 
+	return read_msg;
 }
-
 
 /* Frees the memory allocated to an in-memory B-Tree node
  *
@@ -150,7 +340,13 @@ int chidb_Btree_getNodeByPage(BTree *bt, npage_t npage, BTreeNode **btn)
 int chidb_Btree_freeMemNode(BTree *bt, BTreeNode *btn)
 {
     /* Your code goes here */
+    int free_msg;
+    if((free_msg = chidb_Pager_releaseMemPage(bt->pager, btn->page)) != CHIDB_OK)
+    {
+        return free_msg;
+    }
 
+    free(btn);
     return CHIDB_OK;
 }
 
@@ -174,6 +370,17 @@ int chidb_Btree_freeMemNode(BTree *bt, BTreeNode *btn)
 int chidb_Btree_newNode(BTree *bt, npage_t *npage, uint8_t type)
 {
     /* Your code goes here */
+    int alloc_msg;
+    if((alloc_msg = chidb_Pager_allocatePage(bt -> pager, npage)) != CHIDB_OK)
+    {
+        return alloc_msg;
+    }
+
+    int new_nd_msg;
+    if((new_nd_msg = chidb_Btree_initEmptyNode(bt, *npage, type)) != CHIDB_OK)
+    {
+        return new_nd_msg;
+    }
 
     return CHIDB_OK;
 }
@@ -199,10 +406,50 @@ int chidb_Btree_newNode(BTree *bt, npage_t *npage, uint8_t type)
 int chidb_Btree_initEmptyNode(BTree *bt, npage_t npage, uint8_t type)
 {
     /* Your code goes here */
+    if(bt == NULL)
+    {
+    	return CHIDB_EMISUSE;
+    }
+    bool isInternal = isInternal(type);
+    bool isHeaderPage = (npage == 1);
 
-    return CHIDB_OK;
+    const uint16_t page_size = bt->pager->page_size;
+    uint8_t page_buff[page_size];
+    uint8_t* node_start = isHeaderPage ? page_buff+FILE_HEADER_SIZE : page_buff;
+
+    uint8_t* type_p = node_start;
+    uint8_t* free_off_p = node_start + 1;
+    uint8_t* num_cells_p = node_start + 3;
+    uint8_t* cell_off_p = node_start + 5;
+    // if(isInternal)
+    // {
+    //     uint8_t* rt_page_p = node_start + 8;
+    // }
+    putByte(type_p, type);
+    if(isInternal)
+    {
+        (isHeaderPage) ? put2byte(free_off_p, 112) : put2byte(free_off_p, 12);
+    }
+    else
+    {
+        (isHeaderPage) ? put2byte(free_off_p, 108) : put2byte(free_off_p, 8);
+    }
+    put2byte(num_cells_p, 0);
+    put2byte(cell_off_p, bt->pager->page_size);
+    putByte(node_start+7, 0);
+
+    MemPage new_page;	//is it ok for mem_page and for the buffer below to be on the stack?
+    new_page.npage = npage;
+    new_page.data = page_buff;
+    
+    int write_msg;
+    if((write_msg = chidb_Pager_writePage(bt->pager, &new_page))!=CHIDB_OK)
+    {
+        return write_msg;
+    }
+
+   	return CHIDB_OK;
 }
-
 
 
 /* Write an in-memory B-Tree node to disk
@@ -225,10 +472,37 @@ int chidb_Btree_initEmptyNode(BTree *bt, npage_t npage, uint8_t type)
 int chidb_Btree_writeNode(BTree *bt, BTreeNode *btn)
 {
     /* Your code goes here */
+    if(bt == NULL || btn == NULL)
+    {
+    	return CHIDB_EMISUSE;
+    }
+    uint8_t *data = btn -> page -> data;
+    uint8_t* node_start = NULL;
+    if(isHeaderPage((btn -> page -> npage)))
+    {
+    	 node_start = data + FILE_HEADER_SIZE;
+    }
+    else 
+    {
+    	node_start = data;
+    }
 
-    return CHIDB_OK;
+    uint8_t *free_off_p = node_start+1;
+    uint8_t *n_cells_p = node_start+3;
+    uint8_t *cell_off_p = node_start+5;
+    uint8_t *rt_ptr_p = node_start+8;
+
+    putByte(node_start, btn -> type);
+   	put2byte(free_off_p, btn -> free_offset);
+    put2byte(n_cells_p, btn -> n_cells);
+    put2byte(cell_off_p, btn -> cells_offset);
+    if(isInternal(btn->type))
+    {
+    	put4byte(rt_ptr_p, btn -> right_page);
+    }
+    
+    return chidb_Pager_writePage(bt -> pager, btn -> page);
 }
-
 
 /* Read the contents of a cell
  *

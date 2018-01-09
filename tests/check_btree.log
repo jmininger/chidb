@@ -1,0 +1,3 @@
+Running suite(s): B-Trees
+100%: Checks: 10, Failures: 0, Errors: 0
+PASS tests/check_btree (exit status: 0)

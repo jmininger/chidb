@@ -144,8 +144,9 @@ static void chidb_Btree_packFileHeader(uint8_t* buff_p, uint16_t page_size)
 int chidb_Btree_open(const char *filename, chidb *db, BTree **bt)
 {
     /* Your code goes here */
-    // log = fopen("log.txt", "a");
-    // if(log==NULL){return -1;}
+    // log = fopen("log.txt", "a+");
+    // if(log==NULL){
+    //     return -1;}
     // fprintf(log, "Opening chidb\n");
 
 	if(filename == NULL || db == NULL || bt == NULL)
@@ -504,6 +505,7 @@ int chidb_Btree_writeNode(BTree *bt, BTreeNode *btn)
     return chidb_Pager_writePage(bt -> pager, btn -> page);
 }
 
+
 /* Read the contents of a cell
  *
  * Reads the contents of a cell from a BTreeNode and stores them in a BTreeCell.
@@ -525,6 +527,44 @@ int chidb_Btree_writeNode(BTree *bt, BTreeNode *btn)
 int chidb_Btree_getCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
 {
     /* Your code goes here */
+    if(btn == NULL || cell == NULL)
+    {
+        return CHIDB_EMISUSE;
+    }
+    if(ncell > btn -> n_cells || ncell < 1)//1 or 0?
+    {
+        return CHIDB_ECELLNO;
+    }
+
+    uint8_t* node_start = btn -> page -> data;
+    uint8_t* offset_p = btn -> celloffset_array + (2 * ncell);
+    uint8_t* cell_p = node_start + get2byte(offset_p);
+
+    cell -> type = btn -> type;
+    switch (btn -> type)
+    {
+        int rc;
+        case PGTYPE_TABLE_INTERNAL:
+            rc = getVarint32(cell_p + 4, &(cell -> key));
+            cell -> fields.tableInternal.child_page = get4byte(cell_p);
+            break;
+        case PGTYPE_TABLE_LEAF:
+            rc = getVarint32(cell_p + 4,  &(cell -> key));
+            rc = getVarint32(cell_p, &(cell -> fields.tableLeaf.data_size));
+            cell -> fields.tableLeaf.data = cell_p + 8;
+            break;
+        case PGTYPE_INDEX_INTERNAL:
+            cell -> key = get4byte(cell_p + 8);
+            cell -> fields.indexInternal.keyPk = get4byte(cell_p + 12);
+            cell -> fields.indexInternal.child_page = get4byte(cell_p);
+            break;
+        case PGTYPE_INDEX_LEAF:
+            cell -> key = get4byte(cell_p + 4);
+            cell -> fields.indexLeaf.keyPk = get4byte(cell_p + 8);
+            break;
+        default:
+            break;
+    }
 
     return CHIDB_OK;
 }

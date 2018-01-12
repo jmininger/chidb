@@ -3,21 +3,12 @@
 =================================
 
 # TOTAL: 5
-# PASS:  4
+# PASS:  5
 # SKIP:  0
 # XFAIL: 0
-# FAIL:  1
+# FAIL:  0
 # XPASS: 0
 # ERROR: 0
 
 .. contents:: :depth: 2
-
-FAIL: tests/check_btree
-=======================
-
-Running suite(s): B-Trees
-50%: Checks: 4, Failures: 2, Errors: 0
-tests/check_btree_4.c:75:F:Step 4: Manipulating B-Tree cells:test_4_3:0: Assertion 'btn->n_cells == old_ncell + 1' failed
-tests/check_btree_4.c:122:F:Step 4: Manipulating B-Tree cells:test_4_4:0: Assertion 'btn->n_cells == old_ncell + 1' failed
-FAIL tests/check_btree (exit status: 1)
 

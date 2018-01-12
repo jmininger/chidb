@@ -536,7 +536,7 @@ int chidb_Btree_getCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
         return CHIDB_ECELLNO;
     }
 
-    uint8_t* node_start = btn -> page -> data;
+    uint8_t* node_start = btn -> page -> data; //DO I NEED TO CHECK FOR HEADER?
     uint8_t* offset_p = btn -> celloffset_array + (2 * ncell);
     uint8_t* cell_p = node_start + get2byte(offset_p);
 
@@ -595,7 +595,92 @@ int chidb_Btree_getCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
  */
 int chidb_Btree_insertCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
 {
+    //NOTE!!! ncell starts at 0, NOT AT 1
+
     /* Your code goes here */
+    if(btn == NULL || cell == NULL)
+    {
+        return CHIDB_EMISUSE;
+    }
+
+    //uint8_t *node_start_p = btn -> page -> data + (isHeaderPage(btn->npage) ? 100 : 0);
+    uint8_t *data_p = btn -> page -> data;
+    
+    size_t cell_size = 0;
+    uint8_t *new_cell_p = NULL;
+    switch(btn -> type)
+    {
+        case PGTYPE_TABLE_INTERNAL:
+            cell_size = 8;
+            //Make sure that the free space can hold both the cell and the cell_offset
+            assert((btn -> cells_offset - btn -> free_offset) >= cell_size + sizeof(uint16_t));
+            new_cell_p = data_p + (btn -> cells_offset - cell_size);
+            put4byte(new_cell_p, cell -> fields.tableInternal.child_page);
+            putVarint32(new_cell_p + 4, cell -> key);
+            break;
+        
+        case PGTYPE_TABLE_LEAF:
+            //8 = bytes to hold (data size + key)
+            cell_size = 8 + cell -> fields.tableLeaf.data_size;
+            //Make sure that the free space can hold both the cell and the cell_offset
+            assert((btn -> cells_offset - btn -> free_offset) >= cell_size + sizeof(uint16_t));
+            new_cell_p = data_p + (btn -> cells_offset - cell_size);
+            putVarint32(new_cell_p, cell -> fields.tableLeaf.data_size);
+            putVarint32(new_cell_p+4, cell -> key);
+            memcpy(new_cell_p+8, cell -> fields.tableLeaf.data, cell -> fields.tableLeaf.data_size);
+            break;
+        
+        case PGTYPE_INDEX_INTERNAL:
+            cell_size = 16;
+            //Make sure that the free space can hold both the cell and the cell_offset
+            assert((btn -> cells_offset - btn -> free_offset) >= cell_size + sizeof(uint16_t));
+            new_cell_p = data_p + (btn -> cells_offset - cell_size);
+            put4byte(new_cell_p, cell -> fields.indexInternal.child_page);
+            putByte(new_cell_p+4, 0x0B);
+            putByte(new_cell_p+5, 0x03);
+            putByte(new_cell_p+6, 0x04);
+            putByte(new_cell_p+7, 0x04);
+            put4byte(new_cell_p+8, cell -> key);
+            put4byte(new_cell_p+12, cell -> fields.indexInternal.keyPk);
+            break;
+
+        case PGTYPE_INDEX_LEAF:
+            cell_size = 12;
+            //Make sure that the free space can hold both the cell and the cell_offset
+            assert((btn -> cells_offset - btn -> free_offset) >= cell_size + sizeof(uint16_t));
+            new_cell_p = data_p + (btn -> cells_offset - cell_size);
+            putByte(new_cell_p, 0x0B);
+            putByte(new_cell_p+1, 0x03);
+            putByte(new_cell_p+2, 0x04);
+            putByte(new_cell_p+3, 0x04);
+            put4byte(new_cell_p+4, cell -> key);
+            put4byte(new_cell_p+8, cell -> fields.indexLeaf.keyPk);
+            break;
+
+        default: 
+            break;
+    }
+    
+    assert(new_cell_p > data_p);
+    uint16_t cell_offset = (new_cell_p - data_p);
+    if(ncell >= btn -> n_cells)
+    {
+        uint8_t *cell_offset_p = data_p + (btn -> free_offset);
+        put2byte(cell_offset_p, cell_offset);
+        //if internal deal with right page ptr
+    }
+    else
+    {
+        uint8_t* insert_point = btn -> celloffset_array + (2 * ncell);
+        memcpy(insert_point + 2, insert_point,  2*(btn->n_cells - ncell));
+        put2byte(insert_point, cell_offset);
+    }
+    put2byte(data_p + 1, get2byte(data_p + 1)+2);
+    put2byte(data_p + 3, get2byte(data_p + 3)+1);
+    put2byte(data_p + 5, cell_offset);
+    btn -> free_offset = btn -> free_offset + 2;
+    btn -> n_cells = btn -> n_cells + 1;
+    btn -> cells_offset = cell_offset;
 
     return CHIDB_OK;
 }

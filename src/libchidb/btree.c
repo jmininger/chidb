@@ -56,11 +56,19 @@
 #include "pager.h"
 #include "util.h"
 
+// REMEMBER TO analyze THIS MODULE WHEN DONE, SO THAT IF ASKED TO IMPLEMENT A BTREE IN AN INTERVIEW, 
+// I CAN TAKE THE PARTS OF THE IMPLEMENTATION THAT I LIKE AND TAKE THE PARTS THAT I DONT (IS A PAGER INTERFACE
+// THE BEST WAY TO GO ABOUT IT?) AND BE ABLE TO TALK ABOUT HOW I WOULD DESIGN MY OWN
+//  
+
+
+
 
 #define FILE_HEADER_SIZE (100)
 #define getByte(x)   ((x)[0])
 #define putByte(p,v) ((p)[0] = (uint8_t)(v))
 #define isInternal(type) (type == PGTYPE_TABLE_INTERNAL || type == PGTYPE_INDEX_INTERNAL)
+#define isLeaf(type) (type == PGTYPE_TABLE_LEAF || type == PGTYPE_INDEX_LEAF)
 #define isHeaderPage(npage) (npage == 1)
 static FILE *log;
 
@@ -531,7 +539,7 @@ int chidb_Btree_getCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
     {
         return CHIDB_EMISUSE;
     }
-    if(ncell > btn -> n_cells || ncell < 1)//1 or 0?
+    if(ncell > btn -> n_cells)
     {
         return CHIDB_ECELLNO;
     }
@@ -596,7 +604,6 @@ int chidb_Btree_getCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
 int chidb_Btree_insertCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
 {
     //NOTE!!! ncell starts at 0, NOT AT 1
-
     /* Your code goes here */
     if(btn == NULL || cell == NULL)
     {
@@ -685,6 +692,89 @@ int chidb_Btree_insertCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
     return CHIDB_OK;
 }
 
+/* Recursively searches for the node in the tree containing the data
+ *
+ * Takes a page number and a key, and returns a pointer to the node containing
+ *  the data being searched for by recursively calling itself 
+ *
+ * Parameters
+ * - bt: B-Tree file
+ * - subRoot: Page number of the node of the BTree to be searched
+ * - key: Entry key
+ * - ncell: Out-parameter where the cell number is held if an internalIndex page 
+        contains the actual data being searced for. This occurs b/c indeces are stored
+        in B-trees as opposed to B+ trees
+ * - flag: Out-parameter where any error codes are placed. Meant for debugging purposes
+ *
+ * Return
+ * - BTreeNode*: A pointer to the btree node in memory that contains the data
+ *     Is NULL on error
+ */
+static BTreeNode* chidb_Btree_findDataPage(BTree *bt, npage_t subRoot, chidb_key_t key, ncell_t* ncell, int*flag)
+{
+    //Read in node from provided page
+    BTreeNode *node_p = NULL;
+    if(chidb_Btree_getNodeByPage(bt, subRoot, &node_p) != CHIDB_OK)
+    {
+        *flag = CHIDB_ENOMEM;
+        return NULL;
+    }
+    
+    uint8_t node_type = node_p -> type;
+    
+    //If the node is a leaf, return a ptr to the page
+    if(isLeaf(node_type))
+    {
+        return node_p;
+    }
+    
+    //Cycle through the keys that the internal node stores
+    for(int i = 0; i < node_p -> n_cells; i++)
+    {
+        BTreeCell cell;
+        int cell_err;
+        if((cell_err = chidb_Btree_getCell(node_p, i, &cell))!=CHIDB_OK)
+        {
+            *flag = cell_err;
+            return NULL;
+        }
+        
+        //if the index internal page contains a record
+        if(key == cell.key && node_type == PGTYPE_INDEX_INTERNAL)
+        {
+            *ncell = i;
+            return node_p;
+        }
+        //if the internal page holds the next page
+        else if(key <= cell.key)
+        {
+            npage_t child_page = (node_type == PGTYPE_TABLE_INTERNAL)?
+                                cell.fields.tableInternal.child_page:
+                                cell.fields.indexInternal.child_page;
+            
+            int free_err;
+            if((free_err = chidb_Btree_freeMemNode(bt, node_p))!=CHIDB_OK)
+            {
+                *flag = free_err;
+                return NULL;
+            }            
+            return chidb_Btree_findDataPage(bt, child_page, key, ncell, flag);
+        }
+    }
+    //This point is reached when the key is greater than all of the keys stored
+    //Hence we go to the page stored in the node's "rightpage" ptr
+    
+    npage_t child_page = node_p -> right_page;
+    int free_err;
+    if((free_err = chidb_Btree_freeMemNode(bt, node_p))!=CHIDB_OK)
+    {
+        *flag = free_err;
+        return NULL;
+    }
+    return chidb_Btree_findDataPage(bt, child_page, key, ncell, flag);
+
+}
+
 /* Find an entry in a table B-Tree
  *
  * Finds the data associated for a given key in a table B-Tree
@@ -705,10 +795,61 @@ int chidb_Btree_insertCell(BTreeNode *btn, ncell_t ncell, BTreeCell *cell)
 int chidb_Btree_find(BTree *bt, npage_t nroot, chidb_key_t key, uint8_t **data, uint16_t *size)
 {
     /* Your code goes here */
+    if(bt == NULL || data == NULL || size == NULL)
+    {
+        return CHIDB_EMISUSE;
+    }
 
-    return CHIDB_OK;
+    //This value holds cell number in the case that we come across an indexInternal page
+    // that holds a record for our key
+    ncell_t ncell;
+    int flag = CHIDB_OK;
+    BTreeNode *node_p = chidb_Btree_findDataPage(bt, nroot, key, &ncell, &flag);
+    if(node_p == NULL)
+    {
+        return CHIDB_ENOMEM;
+    }
+    else if(isInternal(node_p -> type))
+    {
+        BTreeCell cell;
+        chidb_Btree_getCell(node_p, ncell, &cell);
+        size_t data_size = sizeof(chidb_key_t);
+        *data = malloc(data_size);
+        if(*data == NULL)
+        {
+            return CHIDB_ENOMEM;
+        }
+        *size = (uint16_t)data_size;
+        memcpy(*data, &(cell.fields.indexInternal.keyPk), data_size);
+        chidb_Btree_freeMemNode(bt, node_p);
+        return CHIDB_OK;
+
+    }
+    else
+    {
+        assert(node_p->type == PGTYPE_TABLE_LEAF);
+        
+        for(int i = 0; i < node_p -> n_cells; i++)
+        {
+            BTreeCell cell;
+            chidb_Btree_getCell(node_p, i, &cell);
+            if(key == cell.key)
+            {
+                *size = cell.fields.tableLeaf.data_size;
+                *data = malloc(*size);
+                if(*data == NULL)
+                {
+                    return CHIDB_ENOMEM;
+                }
+                memcpy(*data, cell.fields.tableLeaf.data, *size);
+                chidb_Btree_freeMemNode(bt, node_p);
+                return CHIDB_OK;
+            }
+        }
+        chidb_Btree_freeMemNode(bt, node_p);
+        return CHIDB_ENOTFOUND;
+    }
 }
-
 
 
 /* Insert an entry into a table B-Tree

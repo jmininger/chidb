@@ -200,16 +200,6 @@ int chidb_Btree_open(const char *filename, chidb *db, BTree **bt)
 {
     /* Your code goes here */
     log = fopen("log.txt", "a+");
-    //chilog_setloglevel(TRACE);
-    // if(log==NULL)
-    // {
-    //     return -1;
-    // }
-    fprintf(log, "Opening chidb\n");
-    // fflush(log);
-    // int chidb_Btree_print(BTree *bt, npage_t nroot, fBTreeCellPrinter printer, bool verbose);
-    // void chidb_BTree_recordPrinter(BTreeNode *btn, BTreeCell *btc);
-    // void chidb_BTree_stringPrinter(BTreeNode *btn, BTreeCell *btc);
 	
     if(filename == NULL || db == NULL || bt == NULL)
 	{
@@ -309,6 +299,7 @@ int chidb_Btree_open(const char *filename, chidb *db, BTree **bt)
 int chidb_Btree_close(BTree *bt)
 {
     /* Your code goes here */
+    fclose(log);
     if(bt == NULL)
     	return CHIDB_EMISUSE;
 	
@@ -1209,7 +1200,7 @@ int chidb_Btree_insertNonFull(BTree *bt, npage_t npage, BTreeCell *btc)
     {
         ncell_t insert_point = 0;
         //If node has any cells--otherwise, the insert_point stays at 0
-        if(!nodeIsEmpty(node_p))
+        if(!(nodeIsEmpty(node_p)))
         {
             BTreeCell cell;
             int cell_msg = chidb_Btree_getCell(node_p,(node_p -> n_cells - 1),&cell);

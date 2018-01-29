@@ -302,7 +302,7 @@ int chidb_dbm_op_Eq (chidb_stmt *stmt, chidb_dbm_op_t *op)
                 isRegsEqual = (r1 -> value.i == r2 -> value.i);
                 break;
             case REG_STRING:
-                isRegsEqual = (r1 -> value.s == r2 -> value.s);
+                isRegsEqual = strcmp(r1 -> value.s, r2 -> value.s) == 0;
                 break;
             case REG_BINARY:
             /* Check that the sizes are equal and then compare the data */
@@ -348,7 +348,7 @@ int chidb_dbm_op_Ne (chidb_stmt *stmt, chidb_dbm_op_t *op)
                 isRegsNEqual = (r1 -> value.i != r2 -> value.i);
                 break;
             case REG_STRING:
-                isRegsNEqual = (r1 -> value.s != r2 -> value.s);
+                isRegsNEqual = strcmp(r1 -> value.s, r2 -> value.s) != 0;
                 break;
             case REG_BINARY:
                 isRegsNEqual = !((r1 -> value.bin.nbytes == r2 -> value.bin.nbytes) &&
@@ -384,18 +384,23 @@ int chidb_dbm_op_Lt (chidb_stmt *stmt, chidb_dbm_op_t *op)
         bool isRegs2LtReg1 = false;
         switch(r1 -> type)
         {
+            int S1S2cmp;
+            int32_t cmp_len;
+
             case REG_INT32:
-                isRegs2LtReg1 = (r1 -> value.i != r2 -> value.i);
+                isRegs2LtReg1 = (r2 -> value.i < r1 -> value.i);
                 break;
             case REG_STRING:
-                isRegs2LtReg1 = (r1 -> value.s != r2 -> value.s);
+                S1S2cmp = strcmp(r1 -> value.s, r2 -> value.s);
+                isRegs2LtReg1 = S1S2cmp > 0;
                 break;
             case REG_BINARY:
-                isRegs2LtReg1 = !((r1 -> value.bin.nbytes == r2 -> value.bin.nbytes) &&
-                    (0 == memcmp(
-                        r1 -> value.bin.bytes, 
-                        r2 -> value.bin.bytes, 
-                        r1 -> value.bin.nbytes)));
+                cmp_len = (r1 -> value.bin.bytes <= r2 -> value.bin.bytes) ?
+                                    r1 -> value.bin.nbytes : r2 -> value.bin.nbytes;
+                isRegs2LtReg1 = memcmp(
+                    r1 -> value.bin.bytes, 
+                    r2 -> value.bin.bytes, 
+                    cmp_len) > 0;
                 break;
             default:
                 break;
@@ -413,7 +418,45 @@ int chidb_dbm_op_Le (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
 
-    return CHIDB_OK;
+    if(!IS_VALID_REGISTER(stmt, op -> p1) || !IS_VALID_REGISTER(stmt, op -> p3))
+    {
+        return CHIDB_EMISUSE;
+    }
+    else
+    {
+        chidb_dbm_register_t *r1 = &stmt->reg[op->p1];
+        chidb_dbm_register_t *r2 = &stmt->reg[op->p3];
+
+        bool isRegs2LteReg1 = false;
+        switch(r1 -> type)
+        {
+            int S1S2cmp;
+            int32_t cmp_len;
+
+            case REG_INT32:
+                isRegs2LteReg1 = (r2 -> value.i <= r1 -> value.i);
+                break;
+            case REG_STRING:
+                S1S2cmp = strcmp(r1 -> value.s, r2 -> value.s);
+                isRegs2LteReg1 = (S1S2cmp >= 0);
+                break;
+            case REG_BINARY:
+                cmp_len = (r1 -> value.bin.bytes <= r2 -> value.bin.bytes)?
+                                    r1 -> value.bin.nbytes : r2 -> value.bin.nbytes;
+                isRegs2LteReg1 = memcmp(
+                        r1 -> value.bin.bytes, 
+                        r2 -> value.bin.bytes, 
+                        cmp_len) >= 0;
+                break;
+            default:
+                break;
+        }
+        if(isRegs2LteReg1)
+        {
+            stmt -> pc = op -> p2;
+        }
+        return CHIDB_OK;
+    }
 }
 
 
@@ -421,7 +464,45 @@ int chidb_dbm_op_Gt (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
 
-    return CHIDB_OK;
+    if(!IS_VALID_REGISTER(stmt, op -> p1) || !IS_VALID_REGISTER(stmt, op -> p3))
+    {
+        return CHIDB_EMISUSE;
+    }
+    else
+    {
+        chidb_dbm_register_t *r1 = &stmt->reg[op->p1];
+        chidb_dbm_register_t *r2 = &stmt->reg[op->p3];
+
+        bool isRegs2GtReg1 = false;
+        switch(r1 -> type)
+        {
+            int S1S2cmp;
+            int32_t cmp_len;
+
+            case REG_INT32:
+                isRegs2GtReg1 = (r2 -> value.i > r1 -> value.i);
+                break;
+            case REG_STRING:
+                S1S2cmp = strcmp(r1 -> value.s, r2 -> value.s);
+                isRegs2GtReg1 = (S1S2cmp < 0);
+                break;
+            case REG_BINARY:
+                cmp_len = (r1 -> value.bin.bytes <= r2 -> value.bin.bytes)?
+                                    r1 -> value.bin.nbytes : r2 -> value.bin.nbytes;
+                isRegs2GtReg1 = memcmp(
+                        r1 -> value.bin.bytes, 
+                        r2 -> value.bin.bytes, 
+                        cmp_len) < 0;
+                break;
+            default:
+                break;
+        }
+        if(isRegs2GtReg1)
+        {
+            stmt -> pc = op -> p2;
+        }
+        return CHIDB_OK;
+    }
 }
 
 
@@ -429,7 +510,45 @@ int chidb_dbm_op_Ge (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
 
-    return CHIDB_OK;
+    if(!IS_VALID_REGISTER(stmt, op -> p1) || !IS_VALID_REGISTER(stmt, op -> p3))
+    {
+        return CHIDB_EMISUSE;
+    }
+    else
+    {
+        chidb_dbm_register_t *r1 = &stmt->reg[op->p1];
+        chidb_dbm_register_t *r2 = &stmt->reg[op->p3];
+
+        bool isRegs2GteReg1 = false;
+        switch(r1 -> type)
+        {
+            int S1S2cmp;
+            int32_t cmp_len;
+
+            case REG_INT32:
+                isRegs2GteReg1 = (r2 -> value.i >= r1 -> value.i);
+                break;
+            case REG_STRING:
+                S1S2cmp = strcmp(r1 -> value.s, r2 -> value.s);
+                isRegs2GteReg1 = (S1S2cmp <= 0);
+                break;
+            case REG_BINARY:
+                cmp_len = (r1 -> value.bin.bytes <= r2 -> value.bin.bytes)?
+                                    r1 -> value.bin.nbytes : r2 -> value.bin.nbytes;
+                isRegs2GteReg1 = memcmp(
+                        r1 -> value.bin.bytes, 
+                        r2 -> value.bin.bytes, 
+                        cmp_len) <= 0;
+                break;
+            default:
+                break;
+        }
+        if(isRegs2GteReg1)
+        {
+            stmt -> pc = op -> p2;
+        }
+        return CHIDB_OK;
+    }
 }
 
 
@@ -553,7 +672,13 @@ int chidb_dbm_op_SCopy (chidb_stmt *stmt, chidb_dbm_op_t *op)
 int chidb_dbm_op_Halt (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
-
-    return CHIDB_OK;
+    if(op -> p1 != CHIDB_OK)
+    {
+        return op -> p1;
+    }
+    else 
+    {
+        return CHIDB_DONE;
+    }
 }
 

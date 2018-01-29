@@ -192,7 +192,42 @@ int chidb_dbm_op_Key (chidb_stmt *stmt, chidb_dbm_op_t *op)
 int chidb_dbm_op_Integer (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
-
+    
+    if(!EXISTS_REGISTER(stmt, op -> p2))
+    {
+        int rc = realloc_reg(stmt, op -> p2);
+    }
+    chidb_dbm_register_t *r1 = &stmt -> reg[op -> p2];
+    r1 -> type = REG_INT32;
+    r1 -> value.i = op -> p1;
+    /*
+     *   struct chidb_stmt
+     *   {
+     *       chidb *db;
+     *       chisql_statement_t *sql;
+     *       uint32_t pc;
+     *       chidb_dbm_op_t *ops;
+     *       uint32_t nOps; 
+     *       uint32_t endOp;
+     *       chidb_dbm_register_t *reg;
+     *       uint32_t nReg;
+     *       chidb_dbm_cursor_t *cursors;
+     *       uint32_t nCursors;
+     *       uint32_t startRR;
+     *       uint32_t nRR;
+     *       char **cols;
+     *       uint32_t nCols;
+     *       bool explain;
+     *   };
+     *  typedef struct chidb_dbm_op
+     *   {
+     *       opcode_t opcode;
+     *       int32_t p1;
+     *       int32_t p2;
+     *       int32_t p3;
+     *       char *p4;
+     *   } chidb_dbm_op_t;
+     */
     return CHIDB_OK;
 }
 
@@ -200,6 +235,13 @@ int chidb_dbm_op_Integer (chidb_stmt *stmt, chidb_dbm_op_t *op)
 int chidb_dbm_op_String (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
+   if(!EXISTS_REGISTER(stmt, op -> p2))
+    {
+        int rc = realloc_reg(stmt, op -> p2);
+    }
+    chidb_dbm_register_t *r1 = &stmt -> reg[op -> p2];
+    r1 -> type = REG_STRING;
+    r1 -> value.s = strndup(op -> p4, op -> p1);
 
     return CHIDB_OK;
 }
@@ -208,10 +250,13 @@ int chidb_dbm_op_String (chidb_stmt *stmt, chidb_dbm_op_t *op)
 int chidb_dbm_op_Null (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
-
+    if(!EXISTS_REGISTER(stmt, op -> p2))
+    {
+        int rc = realloc_reg(stmt, op -> p2);
+    }
+    chidb_dbm_register_t* r = &stmt -> reg[op->p2];
+    r -> type = REG_NULL;
     return CHIDB_OK;
-
-    return 0;
 }
 
 
@@ -242,24 +287,125 @@ int chidb_dbm_op_Insert (chidb_stmt *stmt, chidb_dbm_op_t *op)
 int chidb_dbm_op_Eq (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
-
-    return CHIDB_OK;
+    if(IS_VALID_REGISTER(stmt, op -> p1) && IS_VALID_REGISTER(stmt, op -> p3))
+    {
+        chidb_dbm_register_t *r1 = &stmt->reg[op->p1];
+        chidb_dbm_register_t *r2 = &stmt->reg[op->p3];
+        /* 
+            The types are assumed to be true according to chidb docs so this is unneccessary:
+            if(r1 -> type == r2 -> type)
+        */
+        bool isRegsEqual = false;
+        switch(r1 -> type)
+        {
+            case REG_INT32:
+                isRegsEqual = (r1 -> value.i == r2 -> value.i);
+                break;
+            case REG_STRING:
+                isRegsEqual = (r1 -> value.s == r2 -> value.s);
+                break;
+            case REG_BINARY:
+            /* Check that the sizes are equal and then compare the data */
+                isRegsEqual = (r1 -> value.bin.nbytes == r2 -> value.bin.nbytes) &&
+                                        (0 == memcmp(
+                                                    r1 -> value.bin.bytes, 
+                                                    r2 -> value.bin.bytes, 
+                                                    r1 -> value.bin.nbytes));
+                break;
+            default:
+                break;
+        }
+        if(isRegsEqual)
+        {
+            stmt -> pc = op -> p2;
+        }
+        return CHIDB_OK;
+    }
+    else 
+        return CHIDB_EMISUSE;
 }
 
 
 int chidb_dbm_op_Ne (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
-
-    return CHIDB_OK;
+    if(!IS_VALID_REGISTER(stmt, op -> p1) || !IS_VALID_REGISTER(stmt, op -> p3))
+    {
+        return CHIDB_EMISUSE;
+    }
+    else
+    {
+        chidb_dbm_register_t *r1 = &stmt->reg[op->p1];
+        chidb_dbm_register_t *r2 = &stmt->reg[op->p3];
+        /* 
+            The types are assumed to be true according to chidb docs so this is unneccessary:
+            if(r1 -> type == r2 -> type)
+        */
+        bool isRegsNEqual = false;
+        switch(r1 -> type)
+        {
+            case REG_INT32:
+                isRegsNEqual = (r1 -> value.i != r2 -> value.i);
+                break;
+            case REG_STRING:
+                isRegsNEqual = (r1 -> value.s != r2 -> value.s);
+                break;
+            case REG_BINARY:
+                isRegsNEqual = !((r1 -> value.bin.nbytes == r2 -> value.bin.nbytes) &&
+                    (0 == memcmp(
+                            r1 -> value.bin.bytes, 
+                            r2 -> value.bin.bytes, 
+                            r1 -> value.bin.nbytes)));
+                break;
+            default:
+                break;
+        }
+        if(isRegsNEqual)
+        {
+            stmt -> pc = op -> p2;
+        }
+        return CHIDB_OK;
+    } 
 }
 
 
 int chidb_dbm_op_Lt (chidb_stmt *stmt, chidb_dbm_op_t *op)
 {
     /* Your code goes here */
+    if(!IS_VALID_REGISTER(stmt, op -> p1) || !IS_VALID_REGISTER(stmt, op -> p3))
+    {
+        return CHIDB_EMISUSE;
+    }
+    else
+    {
+        chidb_dbm_register_t *r1 = &stmt->reg[op->p1];
+        chidb_dbm_register_t *r2 = &stmt->reg[op->p3];
 
-    return CHIDB_OK;
+        bool isRegs2LtReg1 = false;
+        switch(r1 -> type)
+        {
+            case REG_INT32:
+                isRegs2LtReg1 = (r1 -> value.i != r2 -> value.i);
+                break;
+            case REG_STRING:
+                isRegs2LtReg1 = (r1 -> value.s != r2 -> value.s);
+                break;
+            case REG_BINARY:
+                isRegs2LtReg1 = !((r1 -> value.bin.nbytes == r2 -> value.bin.nbytes) &&
+                    (0 == memcmp(
+                        r1 -> value.bin.bytes, 
+                        r2 -> value.bin.bytes, 
+                        r1 -> value.bin.nbytes)));
+                break;
+            default:
+                break;
+        }
+        if(isRegs2LtReg1)
+        {
+            stmt -> pc = op -> p2;
+        }
+        return CHIDB_OK;
+    } 
 }
 
 

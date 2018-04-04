@@ -1,3 +1,8 @@
+The majority of the work so far has taken place in:
+src/libchidb/btree.c
+src/libchidb/dbm-ops.c
+src/libchidb/dbm-cursor.h
+
 chidb - A didactic RDBMS
 =====================================
 
